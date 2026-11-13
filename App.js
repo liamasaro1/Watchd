@@ -1,35 +1,17 @@
-import { StyleSheet, Text, View, TextInput, FlatList, TouchableOpacity, Image, ScrollView, ListHeaderComponent} from 'react-native';
+import { StyleSheet, Text, View, TextInput, FlatList, TouchableOpacity, Image, ScrollView, Keyboard, Modal} from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { useState, useEffect } from 'react';
 import Ionicons from '@react-native-vector-icons/ionicons';
 
-const HomeScreen = () => {
-  let movies = [
-  {
-    id: '1',
-    title: 'A Star is Born',
-    director: 'Bradley Cooper',
-    year: 2018,
-  }, 
-  {
-    id: '2',
-    title: 'Inception',
-    director: 'Christopher Nolan',
-    year: 2010,
-  }, 
-  {
-    id: '3',
-    title: 'Call Me by Your Name',
-    director: 'Luca Guadagnino',
-    year: 2017
-  },
-  {
-    id: '4',
-    title: 'Kill Bill: Volume 1',
-    director: 'Quentin Tarantino',
-    year: 2003,
-  },
-  ];
+const TMDB_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJiOGRlMjAxOGQ1NzUxMDk0NGI1NDgyNmIyMzU3ZmY5NCIsIm5iZiI6MTc5MzgxMDk4Mi42MDMwMDAyLCJzdWIiOiI2YWViNjIyNjczY2M1NDUwYTIxYTlkNjAiLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbiI6MX0.60dIM9myTC8_urMGZIC8S8eW1s1Jc5IBO-tNhsBfEdY';
+
+const HomeScreen = ({navigation}) => {
+  const [movies, setMovies] = useState([]);
+  const [searchResults, setSearchResults] = useState([]);
+  const [search, setSearch] = useState('');
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
 
   let posts = [
   {
@@ -64,22 +46,153 @@ const HomeScreen = () => {
   }
 
   ];
+  
+
+  function getMovies () {
+       return fetch('https://api.themoviedb.org/3/movie/popular',{
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${TMDB_TOKEN}`,
+          accept: 'application/json'
+        },
+       })
+       .then(response => {
+        if (!response.ok) {
+          throw new Error(`TMDB error: ${response.status}`);
+        }
+        return response.json();
+      })
+      .then(responseJson => {
+        setMovies((responseJson.results || []).filter(item => item.poster_path));
+      })
+      .catch(error => {
+        console.error(error);
+      });
+  };
+
+  // Fetches movies and TV shows matching the search text.
+  function searchMovies(query, signal) {
+    return fetch(
+      `https://api.themoviedb.org/3/search/multi?query=${encodeURIComponent(query)}&include_adult=false`,
+      {
+        method: 'GET',
+        signal,
+        headers: {
+          Authorization: `Bearer ${TMDB_TOKEN}`,
+          accept: 'application/json'
+        }
+      }
+    )
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`TMDB error: ${response.status}`);
+      }
+      return response.json();
+    })
+    .then(responseJson => {
+      setSearchResults((responseJson.results || []).filter(item =>
+        (item.media_type === 'movie' || item.media_type === 'tv') &&
+        item.poster_path
+      ));
+    });
+  }
+
+
+  // useEffect tells React to call the getMovies function after rendering the component for the first time. 
+  // The empty array as the second argument means this effect will only run once
+  useEffect(() => {
+    getMovies();
+  }, []);
+
+  // Automatically search when the text changes.
+  useEffect(() => {
+    if (!searchVisible || !search.trim()) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setSearchLoading(true);
+
+    // Wait 350ms before searching so we don't fetch
+    // on every single keystroke.
+    const timer = setTimeout(() => {
+      searchMovies(search.trim(), controller.signal)
+        .catch(error => {
+          if (error.name !== 'AbortError') {
+            console.error(error);
+          }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setSearchLoading(false);
+          }
+        });
+    }, 350);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [search, searchVisible]);
+
+  // Close search and return to the normal HomeScreen.
+  function closeSearch() {
+    Keyboard.dismiss();
+    setSearchVisible(false);
+    setSearch('');
+    setSearchResults([]);
+  }
+
+
 
   const renderItem = data => {
+    const item = data.item;
     return (
       <TouchableOpacity 
         style={{marginRight: 10, alignItems: 'center', paddingTop: 5}}
-        onPress = {() => {
-          alert(`${data.item.title}\nID: ${data.item.id}\nDirected by: ${data.item.director}\nYear: ${data.item.year}`)
-        }
-        }>
-        <Image 
-          source={{ uri: 'https://images.pexels.com/photos/371159/pexels-photo-371159.jpeg?cs=tinysrgb&dpr=1&w=500' }}
-          style={{ width: 110, height: 200 }}
+        onPress={() => {
+          navigation.navigate('Add', {movie: item})
+          alert(
+            `${item.title}\nID: ${item.id}\nPopularity: ${item.popularity}\nReleased on: ${item.release_date}`
+          );
+        }}>
+        <Image
+          source={{ uri: `https://image.tmdb.org/t/p/w500${item.poster_path}` }}
+          style={{ width: 100, height: 150, borderRadius: 5 }}
         />
-        <Text style ={styles.movieTitle}>{data.item.title}</Text>
       </TouchableOpacity>
     )
+  };
+
+  // Used for search results inside the Modal.
+  const renderSearchItem = ({ item }) => {
+    const title = item.title || item.name;
+    const date = item.release_date || item.first_air_date;
+    const year = date ? date.slice(0, 4) : 'Year unknown';
+    const type = item.media_type === 'movie' ? 'Movie' : 'TV Show';
+
+    return (
+      <TouchableOpacity
+        style={styles.searchResult}
+        onPress={() => {
+          navigation.navigate('Add', {movie: item})
+          closeSearch()
+          alert(`${title}\n${type}\n${year}\nID: ${item.id}`);
+        }}
+      >
+        <Image
+          source={{ uri: `https://image.tmdb.org/t/p/w500${item.poster_path}` }}
+          style={styles.searchPoster}
+        />
+
+        <View style={{ flex: 1 }}>
+          <Text style={styles.searchTitle}>{title}</Text>
+          <Text style={styles.searchDetails}>{type} · {year}</Text>
+        </View>
+      </TouchableOpacity>
+    );
   };
 
   // Implement Later for posts
@@ -112,34 +225,55 @@ const HomeScreen = () => {
   // </FlatList>
 
   return (
+    <>
     <ScrollView 
       style={styles.container}
-      contentContainerStyle={styles.scrollContent}>
+      contentContainerStyle={styles.scrollContent}
+      keyboardShouldPersistTaps="handled"
+    >
       <View style = {styles.headerContainer}>
         <Text style = {styles.header}>Watchd</Text>
       </View>
-      <View style = {styles.searchContainer}>
-        <TextInput
-          style = {styles.textInput}
-          placeholder = "Search for a movie"/>
-      </View>
+
+      <TouchableOpacity
+        style = {styles.searchContainer}
+        activeOpacity = {.8}
+        onPress={ () => setSearchVisible(true) }>
+          <Text style = {styles.searchPlaceholder}>
+            Search for a movie or TV show
+          </Text>
+        </TouchableOpacity>
+  
       <View style = {styles.forYouContainer}>
         <Text style = {styles.subHeader}>For You</Text>
         <Text style = {styles.subSubHeader}>Discover recommendations</Text>
+
         <FlatList
           data = {movies}
           horizontal = {true}
           showsHorizontalScrollIndicator={false}
           renderItem ={renderItem}
-          keyExtractor = {item => item.id}
+          keyExtractor = {item => item.id.toString()}
+          snapToInterval={110}
+          decelerationRate="fast"
         />
       </View>
+
       <View style = {styles.forYouContainer}>
         <Text style = {styles.subHeader}>Friends' Activity</Text>
         <Text style = {styles.subSubHeader}>See what your friends are watching</Text>
       </View>
       {posts.map(post => (
-        <View key={post.id} style={{marginTop: 20, backgroundColor: '#ffffff', borderRadius: 10, padding: 10, width: '85%'}}>
+        <View 
+          key={post.id} 
+          style={{
+            marginTop: 20, 
+            backgroundColor: '#ffffff', 
+            borderRadius: 10, 
+            padding: 10, 
+            width: '85%'
+            }}>
+
           <View style={{flexDirection: 'row', alignItems: 'center'}}>
             <Image 
               source={{ uri: post.profileImage }}
@@ -149,15 +283,72 @@ const HomeScreen = () => {
           </View>
           <Image 
               source={{ uri: post.poster }}
-              style={{ width: '90%', height: 200, borderRadius: 5, marginRight: 10 , alignSelf: 'center;'}}
+              style={{ width: '90%', height: 200, borderRadius: 5, marginRight: 10 , alignSelf: 'center'}}
             />
           <Text style={{marginTop: 10}}>{post.review}</Text>
-          <Text style={{marginTop: 5, fontStyle: 'italic'}}>Rating: {post.rating}/5</Text>
+          <Text style={{marginTop: 5, fontStyle: 'italic'}}>Rating: {post.rating}/5
+          </Text>
         </View>
       ))}
     </ScrollView>
+    {/* Search overlay sits outside the ScrollView */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={searchVisible}
+        onRequestClose={closeSearch}
+      >
+        <View style={styles.modalContent}>
+          {/* Tapping the dark background closes the search */}
+          <TouchableOpacity
+            style={StyleSheet.absoluteFillObject}
+            activeOpacity={1}
+            onPress={closeSearch}
+          />
+
+          <View style={styles.modalSearchArea}>
+            <View style={styles.modalSearchRow}>
+              <TextInput
+                style={styles.modalTextInput}
+                placeholder="Search movies and TV shows"
+                placeholderTextColor="#888888"
+                value={search}
+                onChangeText={setSearch}
+                autoFocus={true}
+                autoCorrect={false}
+                returnKeyType="search"
+              />
+
+              <TouchableOpacity onPress={closeSearch}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+
+            {search.trim().length > 0 && (
+              <View style={styles.resultsContainer}>
+                {searchLoading ? (
+                  <Text style={styles.resultMessage}>Searching...</Text>
+                ) : (
+                  <FlatList
+                    data={searchResults}
+                    renderItem={renderSearchItem}
+                    keyExtractor={item => `${item.media_type}-${item.id}`}
+                    keyboardShouldPersistTaps="handled"
+                    ListEmptyComponent={
+                      <Text style={styles.resultMessage}>
+                        No results found
+                      </Text>
+                    }
+                  />
+                )}
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+    </>
   );
-}
+};
 
 const SettingsScreen = () => {
   return (
@@ -169,15 +360,27 @@ const SettingsScreen = () => {
   );
 }
 
-const AddScreen = () => {
+const AddScreen = ({route}) => {
+  const movie = route.params?.movie;
+
   return (
-    <View style={styles.container}>
-      <View style={styles.headerContainer}>
-        <Text style={styles.header}>Add</Text>
-      </View>
-    </View>
+    <ScrollView style={styles.container}>
+      {movie ? (
+        <View style={styles.headerContainer}>
+          <Image
+            source={{ uri: `https://image.tmdb.org/t/p/w500${movie.poster_path}` }}
+            style={styles.addPoster}
+            resizeMode="contain"
+          />
+          <Text>{movie.title || movie.name}</Text>
+          <Text>{movie.release_date || movie.first_air_date}</Text>
+        </View>
+      ) : (
+        <Text>No movie selected</Text>
+      )}
+    </ScrollView>
   );
-}
+};
 
 
 const Tab = createBottomTabNavigator();
@@ -248,7 +451,11 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderRadius: 10,
     marginTop: 15,
-    padding: 10,
+    padding: 12,
+  },
+  searchPlaceholder: {
+    fontSize: 18,
+    color: '#333333',
   },
   forYouContainer: {
     backgroundColor: '#6eaaff',
@@ -262,5 +469,76 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     alignItems: 'center',
+    paddingBottom: 30,
+  },
+
+  // MODAL STYLES
+  modalContent: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+  },
+  modalSearchArea: {
+    marginTop: 65,
+    marginHorizontal: 15,
+    flex: 1,
+  },
+  modalSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  modalTextInput: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    fontSize: 17,
+    color: '#000000',
+  },
+  cancelText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  resultsContainer: {
+    marginTop: 12,
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    maxHeight: '70%',
+    overflow: 'hidden',
+  },
+  searchResult: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eeeeee',
+    gap: 12,
+  },
+  searchPoster: {
+    width: 55,
+    height: 80,
+    borderRadius: 5,
+  },
+  addPoster: {
+    width: 240,
+    height: 360,
+    borderRadius: 5,
+  },
+  searchTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  searchDetails: {
+    fontSize: 13,
+    color: '#777777',
+    marginTop: 4,
+  },
+  resultMessage: {
+    padding: 20,
+    color: '#666666',
+    textAlign: 'center',
   },
 });
